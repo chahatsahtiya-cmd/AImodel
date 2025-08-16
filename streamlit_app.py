@@ -176,4 +176,12 @@ st.subheader("🧬 Medical history (select any that apply)")
 chosen_comorbid = st.multiselect("Comorbidities / special situations", COMORBIDITIES)
 comorbid_count = len(chosen_comorbid)
 
-st.subheader("🌍 Exposure & epidemic
+# 🌍 Exposure & epidemic context (last ~14 days)
+st.subheader("🌍 Exposure & epidemic context (last ~14 days)")
+exposure_options = [label for _, label in EXPOSURES]
+chosen_exposures = st.multiselect("Select all that apply", exposure_options)
+
+# Map labels back to their internal keys safely
+label_to_key = {label: key for key, label in EXPOSURES}
+exposure_keys = {label_to_key[l] for l in chosen_exposures if l in label_to_key}
+
