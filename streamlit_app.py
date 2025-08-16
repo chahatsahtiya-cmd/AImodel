@@ -1,244 +1,179 @@
-# app.py
-# Streamlit Epidemic Diseases Q&A + Safe Guidance (non-diagnostic)
-# Run: streamlit run app.py
-
-from __future__ import annotations
-import re
-from dataclasses import dataclass
-from typing import List, Dict, Tuple
-import datetime as dt
-
 import streamlit as st
+from datetime import datetime
 
-# ------------------------------
-# Configuration & Styles
-# ------------------------------
-st.set_page_config(
-    page_title="Epidemic Diseases Q&A (Safe Guidance Demo)",
-    page_icon="🩺",
-    layout="wide"
-)
+st.set_page_config(page_title="Epidemic Triage Prototype", page_icon="🩺", layout="centered")
 
-HIDE_FOOTER = """
-<style>
-footer {visibility: hidden;}
-</style>
-"""
-st.markdown(HIDE_FOOTER, unsafe_allow_html=True)
-
-# ------------------------------
-# Safety & Disclaimers
-# ------------------------------
+# ----------------------------- SAFETY DISCLAIMER -----------------------------
 DISCLAIMER = """
-**Important Safety Notice**
-
-- This app provides **general educational information only**. It is **not medical advice** and does **not diagnose** conditions.
-- If you have symptoms or concerns, **consult a licensed healthcare professional**.
-- **Seek urgent medical care immediately** if you have any **red-flag symptoms** (listed below).
+**Safety Notice (Prototype Only)**  
+This tool is for demonstration and educational purposes. It is **not** a medical device,
+does **not** provide diagnosis or medical advice, and must not be used for emergencies.
+If you have severe symptoms (e.g., trouble breathing, chest pain, confusion, severe dehydration,
+uncontrolled bleeding) seek **emergency care immediately**.
 """
 
-RED_FLAGS = [
-    "Severe shortness of breath / difficulty breathing",
-    "Blue/gray lips or face",
-    "Severe chest pain or pressure",
-    "Confusion, inability to wake or stay awake",
-    "Seizures",
-    "Severe dehydration (no urination, dizziness, fainting)",
-    "Persistent high fever (> 39.4°C / 103°F) unresponsive to meds",
-    "Signs of shock (cold clammy skin, rapid weak pulse)",
-    "Severe bleeding / black or bloody stool / vomiting blood",
-    "Severe abdominal pain",
-    "Stiff neck with fever and rash (possible meningitis/measles complications)",
-    "Any rapidly worsening symptom"
+# ----------------------------- SIMPLE RULE SET -----------------------------
+# Each "disease" has: core symptoms, context flags, red flag combos, and general advice
+DISEASES = {
+    "COVID-19 / Influenza-like illness (ILI)": {
+        "symptoms": {
+            "fever", "cough", "sore_throat", "runny_nose", "fatigue", "headache",
+            "myalgia", "loss_smell_taste", "shortness_breath"
+        },
+        "context": {"close_contact_sick", "outbreak_local", "crowded_indoor"},
+        "red_flags": {"shortness_breath", "confusion", "chest_pain", "persistent_high_fever"},
+        "prevention": [
+            "Wear a well-fitted mask around others",
+            "Improve ventilation, avoid crowded indoor spaces",
+            "Hand hygiene; cover cough/sneeze"
+        ],
+        "home_care": [
+            "Rest and fluids",
+            "Monitor temperature and breathing",
+            "Isolate from others while symptomatic"
+        ],
+        "for_clinician": [
+            "Consider rapid antigen/RT-PCR (COVID-19) or flu testing where appropriate",
+            "Consider pulse oximetry if available"
+        ]
+    },
+    "Dengue (mosquito-borne)": {
+        "symptoms": {"fever", "headache", "retro_orbital_pain", "myalgia", "arthralgia", "nausea", "vomiting", "rash"},
+        "context": {"mosquito_bites", "outbreak_local", "recent_travel_tropic"},
+        "red_flags": {"bleeding", "severe_abdominal_pain", "persistent_vomiting", "mucosal_bleed", "lethargy"},
+        "prevention": [
+            "Avoid mosquito bites: repellents, long sleeves, screens",
+            "Reduce standing water around home"
+        ],
+        "home_care": [
+            "Rest and oral hydration",
+            "Avoid NSAIDs unless advised by a clinician",
+            "Look for warning signs (bleeding, severe pain, persistent vomiting)"
+        ],
+        "for_clinician": [
+            "CBC/platelets, hematocrit trend; consider dengue testing per local protocol"
+        ]
+    },
+    "Acute gastroenteritis / Cholera-like dehydration risk": {
+        "symptoms": {"diarrhea", "vomiting", "abdominal_pain", "fever"},
+        "context": {"unsafe_water_food", "outbreak_local"},
+        "red_flags": {"severe_dehydration", "blood_in_stool", "persistent_vomiting"},
+        "prevention": [
+            "Safe water/food hygiene",
+            "Handwashing after toilet and before food prep"
+        ],
+        "home_care": [
+            "Oral rehydration solution (ORS) sips frequently",
+            "Seek care if unable to keep fluids down"
+        ],
+        "for_clinician": [
+            "Assess dehydration; stool testing where indicated; electrolytes if available"
+        ]
+    }
+}
+
+SYMPTOMS_LIST = [
+    ("fever", "Fever ≥38°C"),
+    ("cough", "Cough"),
+    ("sore_throat", "Sore throat"),
+    ("runny_nose", "Runny or congested nose"),
+    ("fatigue", "Unusual fatigue"),
+    ("headache", "Headache"),
+    ("myalgia", "Muscle aches"),
+    ("loss_smell_taste", "Loss of smell/taste"),
+    ("shortness_breath", "Shortness of breath"),
+    ("chest_pain", "Chest pain/pressure"),
+    ("confusion", "New confusion/difficulty waking"),
+    ("retro_orbital_pain", "Pain behind the eyes"),
+    ("arthralgia", "Joint pain"),
+    ("nausea", "Nausea"),
+    ("vomiting", "Vomiting"),
+    ("diarrhea", "Diarrhea"),
+    ("abdominal_pain", "Abdominal pain"),
+    ("bleeding", "Bleeding gums/nose/skin bruising"),
+    ("mucosal_bleed", "Mucosal bleed"),
+    ("severe_abdominal_pain", "Severe abdominal pain"),
+    ("persistent_vomiting", "Persistent vomiting"),
+    ("blood_in_stool", "Blood in stool"),
 ]
 
-# ------------------------------
-# Built-in Knowledge Base
-# ------------------------------
-@dataclass
-class DiseaseInfo:
-    name: str
-    common_symptoms: List[str]
-    incubation_days: str
-    transmission: str
-    key_tests: List[str]
-    typical_course: str
-    supportive_care: List[str]
-    treatment_notes_safe: List[str]
-    avoid_notes: List[str]
-    prevention: List[str]
-    red_flags_specific: List[str]
-    keywords: List[str]
+EXPOSURES = [
+    ("close_contact_sick", "Close contact with a sick person in last 14 days"),
+    ("crowded_indoor", "Time spent in crowded/poorly ventilated indoor settings"),
+    ("outbreak_local", "Known local outbreak/epidemic alerts"),
+    ("mosquito_bites", "Frequent mosquito bites recently"),
+    ("recent_travel_tropic", "Travel to tropical/subtropical region recently"),
+    ("unsafe_water_food", "Possibly unsafe water or food consumed recently"),
+]
 
-KB: Dict[str, DiseaseInfo] = {}
+COMORBIDITIES = [
+    "Pregnancy", "Diabetes", "Hypertension", "Heart disease",
+    "Chronic lung disease/asthma", "Kidney disease",
+    "Liver disease", "Immunocompromised"
+]
 
-def add_disease(d: DiseaseInfo):
-    KB[d.name.lower()] = d
-    for k in d.keywords:
-        KB[k.lower()] = d  # alias keywords -> disease
+# ----------------------------- UTILS -----------------------------
+def red_flag_present(selected_symptoms, dehydration_flags):
+    rf = {"shortness_breath", "confusion", "chest_pain", "bleeding",
+          "mucosal_bleed", "severe_abdominal_pain", "persistent_vomiting"}
+    if dehydration_flags.get("severe_dehydration"):
+        rf.add("severe_dehydration")
+    return any(s in rf for s in selected_symptoms) or dehydration_flags.get("severe_dehydration", False)
 
-add_disease(DiseaseInfo(
-    name="COVID-19",
-    common_symptoms=["fever", "cough", "fatigue", "sore throat", "loss of taste or smell", "headache", "muscle aches", "congestion", "shortness of breath"],
-    incubation_days="2–14 days (often 3–5)",
-    transmission="Respiratory droplets/aerosols; close contact; shared indoor air",
-    key_tests=["Rapid antigen test", "PCR test"],
-    typical_course="Mild to moderate in most; risk higher with age, pregnancy, or comorbidities.",
-    supportive_care=[
-        "Hydration and rest",
-        "Fever control (acetaminophen/paracetamol if not contraindicated)",
-        "Masking and isolation per local guidance"
-    ],
-    treatment_notes_safe=[
-        "High-risk individuals may be eligible for antivirals (clinician-prescribed).",
-        "Monitor oxygen saturation if available; seek care if < 92–94% or worsening."
-    ],
-    avoid_notes=[
-        "Avoid unnecessary antibiotics (viral illness)."
-    ],
-    prevention=[
-        "Vaccination per local guidelines",
-        "Ventilation, masking in crowded indoor settings",
-        "Hand hygiene"
-    ],
-    red_flags_specific=[
-        "Worsening shortness of breath",
-        "Oxygen saturation < 92–94% on room air"
-    ],
-    keywords=["covid", "sars-cov-2", "coronavirus"]
-))
+def compute_scores(selected_symptoms, selected_exposures):
+    scores = {}
+    for disease, meta in DISEASES.items():
+        s_overlap = len(meta["symptoms"].intersection(selected_symptoms))
+        c_overlap = len(meta["context"].intersection(selected_exposures))
+        scores[disease] = s_overlap * 2 + c_overlap  # simple weighting: symptoms more important
+    # Normalize to 0-100 for nicer display
+    max_score = max(scores.values()) if scores else 1
+    for k in scores:
+        scores[k] = int(round((scores[k] / max_score) * 100)) if max_score > 0 else 0
+    return dict(sorted(scores.items(), key=lambda kv: kv[1], reverse=True))
 
-add_disease(DiseaseInfo(
-    name="Influenza",
-    common_symptoms=["fever", "chills", "cough", "sore throat", "runny nose", "muscle aches", "headache", "fatigue"],
-    incubation_days="1–4 days",
-    transmission="Respiratory droplets/aerosols; contact with contaminated surfaces",
-    key_tests=["Rapid influenza diagnostic test", "PCR"],
-    typical_course="Abrupt onset; usually resolves in 3–7 days, fatigue may last longer.",
-    supportive_care=[
-        "Hydration, rest",
-        "Acetaminophen/paracetamol for fever and pain if not contraindicated"
-    ],
-    treatment_notes_safe=[
-        "Antivirals may be prescribed for high-risk patients if started early (clinician decision)."
-    ],
-    avoid_notes=["Avoid unnecessary antibiotics."],
-    prevention=["Seasonal vaccination", "Respiratory etiquette"],
-    red_flags_specific=["Shortness of breath", "Persistent high fever", "Chest pain", "Severe weakness"],
-    keywords=["flu", "influenza"]
-))
+def care_level(selected_symptoms, dehydration_flags, days_sick, comorbid_count):
+    # Simple, explainable triage bands
+    if red_flag_present(selected_symptoms, dehydration_flags):
+        return "Emergency", [
+            "Seek emergency care immediately.",
+            "Do not delay; call local emergency number or go to the nearest ER."
+        ]
+    # Prolonged high fever or worsening symptoms → urgent
+    if ("fever" in selected_symptoms and days_sick >= 3) or \
+       ("shortness_breath" in selected_symptoms) or \
+       (dehydration_flags.get("moderate_dehydration") and days_sick >= 1):
+        return "Urgent evaluation (same-day/24h)", [
+            "Arrange in-person clinical evaluation within 24 hours.",
+            "If symptoms worsen, go to emergency care."
+        ]
+    # Higher risk due to comorbidities
+    if comorbid_count >= 2 and ("fever" in selected_symptoms or "cough" in selected_symptoms):
+        return "Prompt clinic visit (48h)", [
+            "Book a clinic visit within 48 hours and monitor closely."
+        ]
+    # Mild
+    return "Home care with monitoring", [
+        "Rest, fluids, and monitor symptoms.",
+        "If symptoms persist/worsen or new red flags appear, seek care."
+    ]
 
-add_disease(DiseaseInfo(
-    name="Dengue",
-    common_symptoms=["fever", "severe headache", "pain behind the eyes", "muscle/joint pain", "nausea", "vomiting", "rash"],
-    incubation_days="4–10 days",
-    transmission="Aedes mosquitoes",
-    key_tests=["NS1 antigen", "IgM/IgG serology", "PCR (early)"],
-    typical_course="Febrile phase 2–7 days; may progress to critical phase (plasma leakage).",
-    supportive_care=[
-        "Hydration with oral rehydration solution (ORS)",
-        "Acetaminophen/paracetamol for fever if not contraindicated",
-        "Close monitoring for warning signs (abdominal pain, bleeding, lethargy)"
-    ],
-    treatment_notes_safe=[
-        "No NSAIDs/aspirin (bleeding risk).",
-        "Assess hematocrit/platelets in clinical care."
-    ],
-    avoid_notes=["Avoid ibuprofen, naproxen, aspirin."],
-    prevention=["Eliminate standing water", "Mosquito repellents, nets, long sleeves"],
-    red_flags_specific=["Bleeding", "Severe abdominal pain", "Persistent vomiting", "Lethargy/restlessness"],
-    keywords=["dengue fever"]
-))
+# ----------------------------- UI -----------------------------
+st.title("🩺 Epidemic Triage – Minimal Prototype")
+st.caption("Ask about medical history, exposure, and symptoms; produce non‑diagnostic, safety‑first guidance.")
 
-add_disease(DiseaseInfo(
-    name="Malaria",
-    common_symptoms=["fever (often periodic)", "chills", "sweats", "headache", "nausea", "vomiting", "fatigue"],
-    incubation_days="7–30+ days depending on species",
-    transmission="Anopheles mosquitoes (parasite Plasmodium)",
-    key_tests=["Rapid diagnostic test (RDT)", "Blood smear microscopy"],
-    typical_course="Can be severe; P. falciparum may rapidly progress.",
-    supportive_care=[
-        "Hydration and fever control (acetaminophen if not contraindicated)"
-    ],
-    treatment_notes_safe=[
-        "Requires clinician-prescribed antimalarials based on species/severity and local resistance.",
-        "Urgent care for suspected severe malaria."
-    ],
-    avoid_notes=["Do not self-treat without testing and medical guidance."],
-    prevention=["Repellents, nets", "Chemoprophylaxis for travelers when indicated"],
-    red_flags_specific=["Confusion", "Seizures", "Severe anemia", "Jaundice", "Respiratory distress"],
-    keywords=["plasmodium"]
-))
+with st.expander("Read first: Safety disclaimer", expanded=False):
+    st.info(DISCLAIMER)
 
-add_disease(DiseaseInfo(
-    name="Cholera",
-    common_symptoms=["profuse watery diarrhea (rice-water stool)", "vomiting", "leg cramps", "thirst"],
-    incubation_days="12 hours–5 days",
-    transmission="Fecal-oral via contaminated water/food",
-    key_tests=["Stool culture/rapid tests per local protocols"],
-    typical_course="Can cause rapid dehydration and shock if untreated.",
-    supportive_care=[
-        "Immediate oral rehydration solution (ORS)",
-        "Seek IV fluids for severe dehydration"
-    ],
-    treatment_notes_safe=[
-        "Clinician may prescribe antibiotics in moderate/severe cases to reduce volume and duration."
-    ],
-    avoid_notes=["Avoid anti-diarrheals that reduce gut motility unless advised by a clinician."],
-    prevention=["Safe water, sanitation, hand hygiene", "Oral cholera vaccines where available"],
-    red_flags_specific=["Sunken eyes, very little/no urination, lethargy, weak pulse"],
-    keywords=["vibrio cholerae"]
-))
+st.subheader("👤 Basic info")
+col1, col2 = st.columns(2)
+with col1:
+    age = st.number_input("Age (years)", min_value=0, max_value=120, value=30)
+with col2:
+    days_sick = st.number_input("How many days have you felt unwell?", min_value=0, max_value=30, value=1)
 
-add_disease(DiseaseInfo(
-    name="Measles",
-    common_symptoms=["fever", "cough", "runny nose", "conjunctivitis", "Koplik spots", "rash (face → body)"],
-    incubation_days="7–21 days",
-    transmission="Highly contagious respiratory droplets/aerosols",
-    key_tests=["Measles IgM serology", "PCR"],
-    typical_course="Rash appears ~day 3–5 of illness; complications possible.",
-    supportive_care=[
-        "Hydration, rest",
-        "Acetaminophen for fever if not contraindicated",
-        "Vitamin A supplementation may be recommended by clinicians"
-    ],
-    treatment_notes_safe=[
-        "Isolation to prevent spread.",
-        "Monitor for pneumonia/encephalitis (seek care)."
-    ],
-    avoid_notes=["Avoid contact with unvaccinated and immunocompromised persons."],
-    prevention=["MMR vaccination", "Isolation during infectious period"],
-    red_flags_specific=["Breathing difficulty", "Persistent high fever", "Altered consciousness", "Seizures"],
-    keywords=["rubeola"]
-))
+st.subheader("🧬 Medical history (select any that apply)")
+chosen_comorbid = st.multiselect("Comorbidities / special situations", COMORBIDITIES)
+comorbid_count = len(chosen_comorbid)
 
-ALL_DISEASES = sorted({v.name for v in KB.values()})
-
-# ------------------------------
-# Helper Functions
-# ------------------------------
-def tokenize(text: str) -> List[str]:
-    return re.findall(r"[a-zA-Z]+", text.lower())
-
-def match_diseases_from_text(text: str, top_k: int = 3) -> List[Tuple[DiseaseInfo, int]]:
-    tokens = tokenize(text)
-    scores = []
-    for disease in {v.name: v for v in KB.values()}.values():
-        score = 0
-        # symptom term overlap
-        for s in disease.common_symptoms + disease.keywords:
-            if any(t in s.lower() or s.lower() in t for t in tokens):
-                score += 2
-        # name hit
-        if disease.name.lower() in text.lower():
-            score += 3
-        scores.append((disease, score))
-    # sort by score desc, then by name
-    scores.sort(key=lambda x: (-x[1], x[0].name))
-    # filter zero scores unless no info typed
-    if text.strip():
-        scores = [s for s in scores if s[1] > 0]
-    return scores[:top_k]
-
-def assess_risk_level(user_red_flags: List[str]) -> str:
-    return "Emergency—seek urgent care" if user_red_f
+st.subheader("🌍 Exposure & epidemic
